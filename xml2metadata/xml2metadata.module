@@ -1,0 +1,1137 @@
+<?php
+
+// Implementation of hook_menu function.
+function xml2metadata_menu() {
+    $items['xml2metadata'] = array(
+        'title' => 'xml2metadata',
+        'page callback' => 'xml2metadata_page_default',
+        'type' => MENU_NORMAL_ITEM,
+        'access arguments' => array('administer xml2metadata'),
+    );
+    return $items;
+}
+
+function xml2metadata_page_default() {
+    return drupal_get_form('xml2metadata_form');
+}
+
+// Implementation of hook_ form function ( to bring out the layout of the drupal form)
+function xml2metadata_form() {
+
+    $form['assigncollection'] = array(
+        '#type' => 'fieldset',
+        '#title' => t('Choose Collection Type'),
+        '#weight' => -9,
+    );
+    $form['assigncollection']['#attributes'] = array('enctype' => "multipart/form-data");
+    $form['assigncollection']['xmlfile'] = array(
+        '#title' => 'Select XML file to create Metadata',
+        '#type' => 'file',
+        '#size' => 40,
+        '#weight' => -10,
+    );
+
+    $form['submit'] = array(
+        '#type' => 'submit',
+        '#value' => t('Create Metadata'),
+    );
+    return $form;
+}
+
+function xml2metadata_form_submit($form, &$form_state) {
+    $filepath = 'public://xml_metadata';
+    file_prepare_directory($filepath, FILE_CREATE_DIRECTORY | FILE_MODIFY_PERMISSIONS);
+
+    // If there is a file uploaded, save it, otherwise validate input on
+    // file.
+    // @todo: Track usage of file, remove file when removing source.
+    if ($file = file_save_upload('xmlfile', array('file_validate_extensions' => array('xml')), $filepath)) {
+        $values['source'] = $file->uri;
+        $values['file'] = $file;
+
+        parse_xml($file);
+    } elseif (empty($values['source'])) {
+        form_set_error('feeds][source', t('Upload a file first.'));
+    }
+    // If a file has not been uploaded and $values['source'] is not empty, make
+    // sure that this file is within Drupal's files directory as otherwise
+    // potentially any file that the web server has access to could be exposed.
+    elseif (strpos($values['source'], file_default_scheme()) !== 0) {
+        form_set_error('feeds][source', t('File needs to reside within the site\'s file directory, its path needs to start with @scheme://.', array('@scheme' => file_default_scheme())));
+    }
+}
+
+//
+function xml2metadata_permission() {
+    return array(
+        'administer xml2metadata' => array(
+            'title' => t('administer xml2metadata'),
+            'description' => t('administer xml2metadata')
+        ),
+    );
+}
+
+/**
+ * Parse the input metadata xml
+ *
+ * @param  string   $file  file path of xml
+ * @param  array  $collectionids  List of Collectionids 
+ */
+function parse_xml($file) {
+    try {
+        $realpath = drupal_realpath($file->uri);
+        $metadata = new SimpleXMLElement($realpath, null, true);
+        global $user_id;
+        $node = new stdClass(); // We create a new node object
+        $node->type = "ct_metadata_core"; // Or any other content type you want   
+        $node->language = LANGUAGE_NONE;
+        ; // Or any language code if Locale module is enabled. More on this below *
+        $node->uid = $user_id; // Or any id you wish
+        //$node->path = array('alias' => 'your node path'); // Setting a node path
+        node_object_prepare($node); // Set some default values.
+
+        $node->field_uploaded_filepath = array(
+            'und' => array(
+                '0' => array(
+                    'fid' => $file->fid,
+                    'display' => '1',
+                    'uid' => $file->uid,
+                    'filename' => $file->filename,
+                    'uri' => $file->uri,
+                    'filemime' => $file->filemime,
+                    'filesize' => $file->filesize,
+                    'status' => $file->status,
+                    'timestamp' => $file->timestamp,
+                    'metatags' => array(),
+                    'rdf_mapping' => array(),
+                ),
+            ),
+        );
+
+        if (isset($metadata->idinfo)) {
+            $idinfo = $metadata->idinfo;
+            if (isset($idinfo->citation->citeinfo)) {
+                $citeinfo = $idinfo->citation->citeinfo;
+                //$node->field_i_citation_title[$node->language][0]['value'] = $citeinfo->title;
+                $node->title = (string) $citeinfo->title; // $metadata->idinfo->citation->citeinfo->title;
+                if (isset($citeinfo->origin)) {
+                    foreach ($citeinfo->origin as $origin) {
+                        $node->field_origin[$node->language][]['value'] = $origin;
+                    }
+                }
+                //Identification->Citation->Publication Date
+                $node->field_pubdate[$node->language][0]['value'] = $citeinfo->pubdate;
+
+                //Identification->Citation->Publication Time 
+                $node->field_pubtime[$node->language][0]['value'] = $citeinfo->pubtime;
+
+                //Identification->Citation->Edition
+                $node->field_edition[$node->language][0]['value'] = $citeinfo->edition;
+
+                //Identification->Citation->Geospatial Data Presentation Form  
+                $node->field_geoform[$node->language][0]['value'] = $citeinfo->geoform;
+
+                //Identification->Citation->Online Linkage 
+                if (isset($citeinfo->onlink))
+                    $node->field_onlink[$node->language][0]['url'] = $citeinfo->onlink;
+
+                //Identification->Citation->series name        
+                $node->field_sername[$node->language][0]['value'] = $citeinfo->sername;
+
+                //Identification->Citation->Issue Identification        
+                $node->field_issue[$node->language][0]['value'] = $citeinfo->issue;
+
+                //Identification->Citation->Publication Place
+                $node->field_pubplace[$node->language][0]['value'] = $citeinfo->pubinfo->pubplace;
+
+                //Identification->Citation->Publisher        
+                $node->field_publish[$node->language][0]['value'] = $citeinfo->pubinfo->publish;
+
+                $node->field_othercit[$node->language][0]['value'] = $citeinfo->othercit;
+            }
+            //Missing Identification->Citation-> Larger Work Citation 
+            //</editor-fold>
+            //<editor-fold desc="Identification->Description region">
+            //Identification->Description->Abstract  
+            if (isset($idinfo->descript)) {
+                $node->field_core_description[$node->language][0]['value'] = $idinfo->descript->abstract;
+                //Identification->Description->Purpose 
+                $node->field_purpose[$node->language][0]['value'] = $idinfo->descript->purpose;
+                $node->field_supplinf[$node->language][0]['value'] = $idinfo->descript->supplinf;
+            }
+
+            //Missing Identification->Description->Supplemental Information    
+            //Identification->Description->Resource Language    
+            $node->field_core_resource_lang[$node->language][0]['value'] = "English";
+
+
+            //</editor-fold>
+            //<editor-fold desc="Identification->timeperd region">
+            //for timeperiod fieldcollection 
+
+            if (isset($idinfo->timeperd)) {
+                $field_collection_item = entity_create('field_collection_item', array('field_name' => 'field_i_iden_timeperiod'));
+                $field_collection_item->setHostEntity('node', $node);
+                $field_collection_item->field_currentness_ref[$node->language][0]['value'] = $idinfo->timeperd->current;
+                if (isset($idinfo->timeperd->timeinfo)) {
+                    $timeinfo = $idinfo->timeperd->timeinfo;
+
+                    //single date
+                    $field_collection_item->field_calendar_date[$node->language][0]['value'] = $timeinfo->sngdate->caldate;
+                    $field_collection_item->field_time_of_day[$node->language][0]['value'] = $timeinfo->sngdate->time;
+
+                    if (isset($timeinfo->rngdates)) {
+                        $field_collection_item->field_beginning_date[$node->language][0]['value'] = $timeinfo->rngdates->begdate;
+                        $field_collection_item->field_beginning_time[$node->language][0]['value'] = $timeinfo->rngdates->begtime;
+                        $field_collection_item->field_ending_date[$node->language][0]['value'] = $timeinfo->rngdates->enddate;
+                        $field_collection_item->field_ending_time[$node->language][0]['value'] = $timeinfo->rngdates->endtime;
+                    }
+                }
+                $field_collection_item->save();
+                //multiple date 
+
+                if (isset($idinfo->timeperd->timeinfo->mdattim->sngdate)) {
+                    foreach ($timeinfo->mdattim->sngdate as $sngdate) {
+                        $field_collection_item1 = entity_create('field_collection_item', array('field_name' => 'field_mul_calendar_datetime'));
+                        $field_collection_item1->setHostEntity('field_collection_item', $field_collection_item);
+                        $field_collection_item1->field_calendar_date[$node->language][0]['value'] = $sngdate->caldate;
+                        $field_collection_item1->field_time_of_day[$node->language][0]['value'] = $sngdate->time;
+                        $field_collection_item1->save();
+                    }
+                }
+            }
+
+            $node->field_progress[$node->language][0]['value'] = $idinfo->status->progress;
+            $node->field_updatefrequency[$node->language][0]['value'] = $idinfo->status->update;
+
+            //</editor-fold>
+            //<editor-fold desc="Identification->spacial Domain region">
+            if (isset($idinfo->spdom)) {
+                $spdom = $idinfo->spdom;
+                if (isset($spdom->bounding)) {
+                    $node->field_core_lat_n[$node->language][0]['value'] = $spdom->bounding->northbc;
+                    $node->field_core_lat_s[$node->language][0]['value'] = $spdom->bounding->southbc;
+                    $node->field_core_long_w[$node->language][0]['value'] = $spdom->bounding->westbc;
+                    $node->field_core_long_e[$node->language][0]['value'] = $spdom->bounding->eastbc;
+                }
+
+                foreach ($spdom->dsgpoly as $dsgpoly) {
+                    $field_collection_item = entity_create('field_collection_item', array('field_name' => 'field_dsgpoly'));
+                    $field_collection_item->setHostEntity('node', $node);
+                    if (isset($dsgpoly->dsgpolyo->gring))
+                        $field_collection_item->field_gring[$node->language][0]['value'] = $dsgpoly->dsgpolyo->gring;
+                    $field_collection_item->save();
+
+                    if (isset($dsgpoly->dsgpolyo->grngpoin)) {
+                        foreach ($dsgpoly->dsgpolyo->grngpoin as $grngpoin) {
+                            $field_collection_item1 = entity_create('field_collection_item', array('field_name' => 'field_dsgpolyo'));
+                            $field_collection_item1->setHostEntity('field_collection_item', $field_collection_item);
+                            $field_collection_item1->field_gringlat[$node->language][0]['value'] = $grngpoin->gringlat;
+                            $field_collection_item1->field_gringlon[$node->language][0]['value'] = $grngpoin->gringlon;
+                            $field_collection_item1->save();
+                        }
+                    }
+
+                    if (isset($dsgpoly->dsgpolyx)) {
+                        foreach ($dsgpoly->dsgpolyx as $dsgpolyx) {
+                            $field_collection_item1 = entity_create('field_collection_item', array('field_name' => 'field_dsgpolyx'));
+                            $field_collection_item1->setHostEntity('field_collection_item', $field_collection_item);
+                            if (isset($dsgpolyx->gring))
+                                $field_collection_item1->field_gring[$node->language][0]['value'] = $dsgpolyx->gring;
+                            $field_collection_item1->save();
+
+                            if (isset($dsgpolyx->grngpoin)) {
+                                foreach ($dsgpolyx->grngpoin as $grngpoin) {
+                                    $field_collection_item2 = entity_create('field_collection_item', array('field_name' => 'field_dsgpolyo'));
+                                    $field_collection_item2->setHostEntity('field_collection_item', $field_collection_item1);
+                                    $field_collection_item2->field_gringlat[$node->language][0]['value'] = $grngpoin->gringlat;
+                                    $field_collection_item2->field_gringlon[$node->language][0]['value'] = $grngpoin->gringlon;
+                                    $field_collection_item2->save();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            //</editor-fold>
+            //<editor-fold desc="Identification->keywords region">
+            if (isset($idinfo->keywords)) {
+                $keywords = $idinfo->keywords;
+
+                if (isset($keywords->theme)) {
+                    $vid = getVidTaxonomy("thematic_keywords");
+                    if ($vid > -1) {
+                        foreach ($keywords->theme as $theme) {
+                            $field_collection_item = entity_create('field_collection_item', array('field_name' => 'field_themekeywords'));
+                            $field_collection_item->setHostEntity('node', $node);
+                            //$field_collection_item->field_themekt[$node->language][0]['value'] =  $theme->themekt;                                   
+
+                            $termparent = new stdClass();
+                            $termparent->name = $theme->themekt;
+                            $termparent->vid = $vid; // ‘1’ is a vocabulary id you wish this term to assign to            
+                            taxonomy_term_save($termparent);
+                            $field_collection_item->field_themekt[$node->language][0]['tid'] = $termparent->tid;
+                            foreach ($theme->themekey as $themekey) {
+                                $term = new stdClass();
+                                $term->name = $themekey;
+                                $term->vid = $vid; // ‘1’ is a vocabulary id you wish this term to assign to
+                                $term->parent = $termparent->tid;
+                                taxonomy_term_save($term);
+                                $field_collection_item->field_themekey[$node->language][]['tid'] = $term->tid;
+                            }
+                        }
+                        $field_collection_item->save();
+                    }
+                }
+
+                if (isset($keywords->place)) {
+                    $vid = getVidTaxonomy("place_keywords");
+                    if ($vid > -1) {
+                        foreach ($keywords->place as $place) {
+                            $field_collection_item = entity_create('field_collection_item', array('field_name' => 'field_place_keywords'));
+                            $field_collection_item->setHostEntity('node', $node);
+
+
+                            $termparent = new stdClass();
+                            $termparent->name = $place->placekt;
+                            $termparent->vid = $vid; // ‘1’ is a vocabulary id you wish this term to assign to            
+                            taxonomy_term_save($termparent);
+                            $field_collection_item->field_placekt[$node->language][0]['tid'] = $termparent->tid;
+                            foreach ($place->placekey as $placekey) {
+                                $term = new stdClass();
+                                $term->name = $placekey;
+                                $term->vid = $vid; // ‘1’ is a vocabulary id you wish this term to assign to
+                                $term->parent = $termparent->tid;
+                                taxonomy_term_save($term);
+                                $field_collection_item->field_placekey[$node->language][]['tid'] = $term->tid;
+                            }
+                        }
+                        $field_collection_item->save();
+                    }
+                }
+                if (isset($keywords->stratum)) {
+                    $vid = getVidTaxonomy("stratum_keywords");
+                    if ($vid > -1) {
+                        foreach ($keywords->stratum as $stratum) {
+                            $field_collection_item = entity_create('field_collection_item', array('field_name' => 'field_stratum_keywords'));
+                            $field_collection_item->setHostEntity('node', $node);
+
+                            $termparent = new stdClass();
+                            $termparent->name = $stratum->stratumkt;
+                            $termparent->vid = $vid; // ‘1’ is a vocabulary id you wish this term to assign to            
+                            taxonomy_term_save($termparent);
+                            $field_collection_item->field_stratumkt[$node->language][0]['tid'] = $termparent->tid;
+
+                            foreach ($stratum->stratumkey as $stratumkey) {
+                                $term = new stdClass();
+                                $term->name = $stratumkey;
+                                $term->vid = $vid; // ‘1’ is a vocabulary id you wish this term to assign to
+                                $term->parent = $termparent->tid;
+                                taxonomy_term_save($term);
+                                $field_collection_item->field_stratumkey[$node->language][]['tid'] = $term->tid;
+                            }
+                        }
+                        $field_collection_item->save();
+                    }
+                }
+                if (isset($keywords->temporal)) {
+                    $vid = getVidTaxonomy("temporal_keywords");
+                    if ($vid > -1) {
+                        foreach ($keywords->temporal as $temporal) {
+                            $field_collection_item = entity_create('field_collection_item', array('field_name' => 'field_temporal_keywords'));
+                            $field_collection_item->setHostEntity('node', $node);
+
+                            $termparent = new stdClass();
+                            $termparent->name = $temporal->temporalkt;
+                            $termparent->vid = $vid; // ‘1’ is a vocabulary id you wish this term to assign to            
+                            taxonomy_term_save($termparent);
+                            $field_collection_item->field_temporalkt[$node->language][0]['tid'] = $termparent->tid;
+                            foreach ($temporal->temporalkey as $temporalkey) {
+                                $term = new stdClass();
+                                $term->name = $temporalkey;
+                                $term->vid = $vid; // ‘1’ is a vocabulary id you wish this term to assign to
+                                $term->parent = $termparent->tid;
+                                taxonomy_term_save($term);
+                                $field_collection_item->field_temporalkey[$node->language][]['tid'] = $term->tid;
+                            }
+                        }
+                        $field_collection_item->save();
+                    }
+                }
+            }
+            //<editor-fold desc="Identification->constraits region">
+            $node->field_core_res_access[$node->language][0]['value'] = $idinfo->accconst;
+            $node->field_core_res_constraint[$node->language][0]['value'] = $idinfo->useconst;
+            $node->field_data_set_credit[$node->language][0]['value'] = $idinfo->datacred;
+            $node->field_native[$node->language][0]['value'] = $idinfo->native;
+            //</editor-fold>
+            //<editor-fold desc="Identification->Point of Contact region">
+
+            if (isset($idinfo->ptcontac->cntinfo)) {
+                $cntinfo = $idinfo->ptcontac->cntinfo;
+
+                $node->field_cont_cit_name_person[$node->language][0]['value'] = $cntinfo->cntorgp->cntper;
+                $node->field_cont_cit_name_org[$node->language][0]['value'] = $cntinfo->cntorgp->cntorg;
+                $node->field_position[$node->language][0]['value'] = $cntinfo->cntpos;
+
+                // $metadata->idinfo->ptcontac->cntinfo->cntaddr
+                //address
+
+                foreach ($cntinfo->cntaddr as $address) {
+                    $field_collection_item = entity_create('field_collection_item', array('field_name' => 'field_iden_originator_add'));
+                    $field_collection_item->setHostEntity('node', $node);
+                    $field_collection_item->field_address_type[$node->language][0]['value'] = $address->addrtype;
+
+                    foreach ($address->address as $insideaddress) {
+                        $field_collection_item->field_cont_cit_street[$node->language][]['value'] = $insideaddress;
+                    }
+                    $field_collection_item->field_cont_cit_city[$node->language][0]['value'] = $address->city;
+                    $field_collection_item->field_cont_cit_province[$node->language][0]['value'] = $address->state;
+                    $field_collection_item->field_cont_cit_postalcode[$node->language][0]['value'] = $address->postal;
+                    $field_collection_item->field_cont_cit_country[$node->language][0]['value'] = $address->country;
+                    $field_collection_item->save();
+                }
+
+                foreach ($cntinfo->cntvoice as $cntvoice) {
+                    // missing  contact voice telephone
+                    $node->field_cont_cit_phone[$node->language][]['value'] = $cntvoice;
+                }
+                //Contact TDD/TTY Telephone
+                foreach ($cntinfo->cnttdd as $cnttdd) {
+                    $node->field_cnttdd[$node->language][]['value'] = $cnttdd;
+                }
+                foreach ($cntinfo->cntfax as $cntfax) {
+                    $node->field_cont_cit_fax[$node->language][]['value'] = $cntfax;
+                }
+                foreach ($cntinfo->cntemail as $cntemail) {
+                    $node->field_cont_cit_email[$node->language][]['value'] = $cntemail;
+                }
+            }
+            //<editor-fold desc="Identification->Browse Graphics region">
+
+            if (isset($idinfo->browse)) {
+                foreach ($idinfo->browse as $browse) {
+                    $field_collection_item = entity_create('field_collection_item', array('field_name' => 'field_i_browse_graphics'));
+                    $field_collection_item->setHostEntity('node', $node);
+                    $field_collection_item->field_i_filename[$node->language][]['value'] = $browse->browsen;
+                    $field_collection_item->field_file_description[$node->language][]['value'] = $browse->browsed;
+                    $field_collection_item->field_i_filetype[$node->language][]['value'] = $browse->browset;
+                    $field_collection_item->save();
+                }
+            }
+
+            //Security Information 
+            if (isset($idinfo->secinfo)) {
+                $node->field_secsys[$node->language][]['value'] = $idinfo->secinfo->secsys;
+                $node->field_secclass[$node->language][]['value'] = $idinfo->secinfo->secclass;
+                $node->field_sechandl[$node->language][]['value'] = $idinfo->secinfo->sechandl;
+            }
+
+            //Cross Reference      
+            if (isset($idinfo->crossref)) {
+                foreach ($idinfo->crossref as $crossref) {
+                    $field_collection_item = entity_create('field_collection_item', array('field_name' => 'field_citation'));
+                    $field_collection_item->setHostEntity('node', $node);
+                    if (isset($crossref->citeinfo)) {
+                        $field_collection_item->field_title[$node->language][0]['value'] = $crossref->citeinfo->title;
+                        foreach ($crossref->citeinfo->origin as $origin) {
+                            $field_collection_item->field_origin[$node->language][]['value'] = $origin;
+                        }
+                        $field_collection_item->field_pubdate[$node->language][0]['value'] = $crossref->citeinfo->pubdate;
+                        $field_collection_item->field_pubtime[$node->language][0]['value'] = $crossref->citeinfo->pubtime;
+                        $field_collection_item->field_edition[$node->language][0]['value'] = $crossref->citeinfo->edition;
+                        $field_collection_item->field_geoform[$node->language][0]['value'] = $crossref->citeinfo->geoform;
+
+                        foreach ($crossref->citeinfo->onlink as $online) {
+                            $field_collection_item->field_onlink[$node->language][]['url'] = $online;
+                        }
+                        $field_collection_item->field_sername[$node->language][0]['value'] = $crossref->citeinfo->serinfo->sername;
+                        $field_collection_item->field_issue[$node->language][0]['value'] = $crossref->citeinfo->serinfo->issue;
+                        $field_collection_item->field_pubplace[$node->language][0]['value'] = $crossref->citeinfo->pubinfo->pubplace;
+                        $field_collection_item->field_publish[$node->language][0]['value'] = $crossref->citeinfo->pubinfo->publish;
+                        $field_collection_item->field_othercit[$node->language][0]['value'] = $crossref->citeinfo->othercit;
+                    }
+                    $field_collection_item->save();
+                }
+            }
+        }
+
+        //</editor-fold>
+        //</editor-fold>
+        //</editor-fold>
+        //</editor-fold>
+        //</editor-fold>
+        //<editor-fold desc="Data Quality region" defaultstate="collapsed">
+        //<editor-fold desc="Data Quality General region" defaultstate="collapsed">
+        if (isset($metadata->dataqual)) {
+            $dataqual = $metadata->dataqual;
+            $node->field_d_logic[$node->language][0]['value'] = $dataqual->logic;
+            $node->field_d_complete[$node->language][0]['value'] = $dataqual->complete;
+            $node->field_d_cloud[$node->language][0]['value'] = $dataqual->cloud;
+            //</editor-fold>
+            //<editor-fold desc="Data Quality Attribute Accuracy region" defaultstate="collapsed">
+
+            if (isset($dataqual->attracc->attraccr))
+                $node->field_d_attraccr[$node->language][0]['value'] = $dataqual->attracc->attraccr;
+
+            if (isset($dataqual->attracc->qattracc)) {
+                foreach ($dataqual->attracc->qattracc as $qattracc) {
+                    $field_collection_item = entity_create('field_collection_item', array('field_name' => 'field_d_accuracy_assessment'));
+                    $field_collection_item->setHostEntity('node', $node);
+                    $field_collection_item->field_d_value[$node->language][0]['value'] = $qattracc->attraccv;
+                    $field_collection_item->field_d_explanation[$node->language][0]['value'] = $qattracc->attracce;
+                    $field_collection_item->save();
+                }
+            }
+
+            //horizontal Positional Accuracy 
+            if (isset($dataqual->posacc->horizpa->horizpar))
+                $node->field_horizpar[$node->language][0]['value'] = $dataqual->posacc->horizpa->horizpar;
+
+            if (isset($dataqual->posacc->horizpa->qhorizpa)) {
+                foreach ($dataqual->posacc->horizpa->qhorizpa as $qhorizpa) {
+                    $field_collection_item = entity_create('field_collection_item', array('field_name' => 'field_qhorizpa'));
+                    $field_collection_item->setHostEntity('node', $node);
+                    $field_collection_item->field_horizpav[$node->language][0]['value'] = $qhorizpa->horizpav;
+                    $field_collection_item->field_horizpae[$node->language][0]['value'] = $qhorizpa->horizpae;
+                    $field_collection_item->save();
+                }
+            }
+
+            //Virtical Positional Accuracy 
+            if (isset($dataqual->posacc->vertacc->vertaccr))
+                $node->field_vertaccr[$node->language][0]['value'] = $dataqual->posacc->vertacc->vertaccr;
+
+            if (isset($dataqual->posacc->vertacc->qvertpa)) {
+                foreach ($dataqual->posacc->vertacc->qvertpa as $qvertpa) {
+                    $field_collection_item = entity_create('field_collection_item', array('field_name' => 'field_qhorizpa'));
+                    $field_collection_item->setHostEntity('node', $node);
+                    $field_collection_item->field_vertaccv[$node->language][0]['value'] = $qvertpa->vertaccv;
+                    $field_collection_item->field_vertacce[$node->language][0]['value'] = $qvertpa->vertacce;
+                    $field_collection_item->save();
+                }
+            }
+
+
+            //</editor-fold>
+            // Missing Possitional Accuracy
+            //<editor-fold desc="Data Quality lineage region" defaultstate="collapsed">
+            //<editor-fold desc="Data Quality lineage Source Citation region" defaultstate="collapsed">
+
+            if (isset($dataqual->lineage->srcinfo)) {
+                foreach ($dataqual->lineage->srcinfo as $srcinfo) {
+                    $field_collection_item = entity_create('field_collection_item', array('field_name' => 'field_d_sourcecitation'));
+                    $field_collection_item->setHostEntity('node', $node);
+
+                    $field_collection_item->field_srcscale[$node->language][0]['value'] = $srcinfo->srcscale;
+                    $field_collection_item->field_typesrc[$node->language][0]['value'] = $srcinfo->typesrc;
+                    $field_collection_item->field_srccitea[$node->language][0]['value'] = $srcinfo->srccitea;
+                    $field_collection_item->field_srccontr[$node->language][0]['value'] = $srcinfo->srccontr;
+
+
+                    if (isset($srcinfo->srccite->citeinfo)) {
+                        $citeinfo = $srcinfo->srccite->citeinfo;
+                        $field_collection_item->field_title[$node->language][0]['value'] = $citeinfo->title;
+                        foreach ($citeinfo->origin as $origin) {
+                            $field_collection_item->field_origin[$node->language][]['value'] = $origin;
+                        }
+                        $field_collection_item->field_pubdate[$node->language][0]['value'] = $citeinfo->pubdate;
+                        $field_collection_item->field_pubtime[$node->language][0]['value'] = $citeinfo->pubtime;
+                        $field_collection_item->field_edition[$node->language][0]['value'] = $citeinfo->edition;
+                        $field_collection_item->field_geoform[$node->language][0]['value'] = $citeinfo->geoform;
+                        foreach ($citeinfo->onlink as $online) {
+                            $field_collection_item->field_onlink[$node->language][]['url'] = $online;
+                        }
+                        $field_collection_item->field_sername[$node->language][0]['value'] = $citeinfo->serinfo->sername;
+                        $field_collection_item->field_issue[$node->language][0]['value'] = $citeinfo->serinfo->issue;
+                        $field_collection_item->field_pubplace[$node->language][0]['value'] = $citeinfo->pubinfo->pubplace;
+                        $field_collection_item->field_publish[$node->language][0]['value'] = $citeinfo->pubinfo->publish;
+                        $field_collection_item->field_othercit[$node->language][0]['value'] = $citeinfo->othercit;
+                    }
+                    $field_collection_item->save();
+                    //for timeperiod fieldcollection inside sourcecitation fieldcollection
+
+                    if (isset($srcinfo->srctime)) {
+                        $field_collection_item1 = entity_create('field_collection_item', array('field_name' => 'field_i_iden_timeperiod'));
+                        $field_collection_item1->setHostEntity('field_collection_item', $field_collection_item);
+                        $field_collection_item1->field_currentness_ref[$node->language][0]['value'] = $srcinfo->srctime->srccurr;
+
+
+                        if (isset($srcinfo->srctime->timeinfo)) {
+                            $timeinfo = $srcinfo->srctime->timeinfo;
+                            //single date
+                            if (isset($timeinfo->sngdate)) {
+                                $field_collection_item1->field_calendar_date[$node->language][0]['value'] = $timeinfo->sngdate->caldate;
+                                $field_collection_item1->field_time_of_day[$node->language][0]['value'] = $timeinfo->sngdate->time;
+                            }
+                            //range of date
+                            else if ($timeinfo->rngdates) {
+                                $field_collection_item1->field_beginning_date[$node->language][0]['value'] = $timeinfo->rngdates->begdate;
+                                $field_collection_item1->field_beginning_time[$node->language][0]['value'] = $timeinfo->rngdates->begtime;
+                                $field_collection_item1->field_ending_date[$node->language][0]['value'] = $timeinfo->rngdates->enddate;
+                                $field_collection_item1->field_ending_time[$node->language][0]['value'] = $timeinfo->rngdates->endtime;
+                            }
+                        }
+                        $field_collection_item1->save();
+                    }
+                    //multiple date
+                    if (isset($srcinfo->srctime->timeinfo->mdattim->sngdate)) {
+                        foreach ($srcinfo->srctime->timeinfo->mdattim->sngdate as $sngdate) {
+                            $field_collection_item2 = entity_create('field_collection_item', array('field_name' => 'field_mul_calendar_datetime'));
+                            $field_collection_item2->setHostEntity('field_collection_item', $field_collection_item1);
+                            $field_collection_item2->field_calendar_date[$node->language][0]['value'] = $sngdate->caldate;
+                            $field_collection_item2->field_time_of_day[$node->language][0]['value'] = $sngdate->time;
+                            $field_collection_item2->save();
+                        }
+                    }
+                }
+            }
+            //lineage->process step 
+            if (isset($dataqual->lineage->procstep)) {
+                $procstep = $dataqual->lineage->procstep;
+
+                $field_collection_item = entity_create('field_collection_item', array('field_name' => 'field_d_process_step'));
+                $field_collection_item->setHostEntity('node', $node);
+
+
+
+                $field_collection_item->field_d_process_descp[$node->language][0]['value'] = $procstep->procdesc;
+                $field_collection_item->field_d_processdate[$node->language][0]['value'] = $procstep->procdate;
+                $field_collection_item->field_d_processtime[$node->language][0]['value'] = $procstep->proctime;
+                //Source Used Citation Abbreviation
+                $field_collection_item->field_srcused[$node->language][0]['value'] = $procstep->srcused;
+                // Source Produced Citation Abbreviation
+                $field_collection_item->field_srcprod[$node->language][0]['value'] = $procstep->srcprod;
+                $field_collection_item->save();
+
+                //process contact proccont
+                //----------------
+                if (isset($procstep->proccont->cntinfo)) {
+                    $cntinfo = $procstep->proccont->cntinfo;
+
+                    $field_collection_item1 = entity_create('field_collection_item', array('field_name' => 'field_contact_info'));
+                    $field_collection_item1->setHostEntity('field_collection_item', $field_collection_item);
+                    $field_collection_item1->field_cont_cit_name_person[$node->language][0]['value'] = $cntinfo->cntorgp->cntper;
+                    $field_collection_item1->field_cont_cit_name_org[$node->language][0]['value'] = $cntinfo->cntorgp->cntorg;
+                    $field_collection_item1->field_position[$node->language][0]['value'] = $cntinfo->cntpos;
+
+                    foreach ($cntinfo->cntvoice as $cntvoice) {
+                        // missing  contact voice telephone
+                        $field_collection_item1->field_cont_cit_phone[$node->language][]['value'] = $cntvoice;
+                    }
+
+                    //Contact TDD/TTY Telephone
+                    foreach ($cntinfo->cnttdd as $cnttdd) {
+                        $node->field_cnttdd[$node->language][]['value'] = $cnttdd;
+                    }
+                    foreach ($cntinfo->cntfax as $cntfax) {
+                        $field_collection_item1->field_cont_cit_fax[$node->language][]['value'] = $cntfax;
+                    }
+                    foreach ($cntinfo->cntemail as $cntemail) {
+                        $field_collection_item1->field_cont_cit_email[$node->language][]['value'] = $cntemail;
+                    }
+
+                    $field_collection_item1->save();
+
+                    foreach ($cntinfo->cntaddr as $address) {
+                        $field_collection_item2 = entity_create('field_collection_item', array('field_name' => 'field_iden_originator_add'));
+                        $field_collection_item2->setHostEntity('field_collection_item', $field_collection_item1);
+                        $field_collection_item2->field_address_type[$node->language][0]['value'] = $address->addrtype;
+
+                        foreach ($address->address as $insideaddress) {
+                            $field_collection_item2->field_cont_cit_street[$node->language][]['value'] = $insideaddress;
+                        }
+                        $field_collection_item2->field_cont_cit_city[$node->language][0]['value'] = $address->city;
+                        $field_collection_item2->field_cont_cit_province[$node->language][0]['value'] = $address->state;
+                        $field_collection_item2->field_cont_cit_postalcode[$node->language][0]['value'] = $address->postal;
+                        $field_collection_item2->field_cont_cit_country[$node->language][0]['value'] = $address->country;
+                        $field_collection_item2->save();
+                    }
+                }
+            }
+        }
+        if (isset($metadata->spdoinfo)) {
+            $spdoinfo = $metadata->spdoinfo;
+            $node->field_direct_spatial_ref[$node->language][0]['value'] = strtolower($spdoinfo->direct);
+            $node->field_indirect_spatial_ref[$node->language][0]['value'] = $spdoinfo->indspref;
+
+            if (isset($spdoinfo->direct)) {
+                $directstr = (string) $spdoinfo->direct;
+                if ($directstr == "raster") {
+                    $node->field_rasttype[$node->language][0]['value'] = $spdoinfo->rastinfo->rasttype;
+                    $node->field_rowcount[$node->language][0]['value'] = $spdoinfo->rastinfo->rowcount;
+                    $node->field_colcount[$node->language][0]['value'] = $spdoinfo->rastinfo->colcount;
+                    $node->field_vrtcount[$node->language][0]['value'] = $spdoinfo->rastinfo->vrtcount;
+                } else {
+
+                    if (isset($spdoinfo->ptvctinf->sdtsterm)) {
+                        $node->field_select_sdts_vpf[$node->language][0]['value'] = "sdts";
+
+                        foreach ($spdoinfo->ptvctinf->sdtsterm as $sdtsterm) {
+                            $field_collection_item = entity_create('field_collection_item', array('field_name' => 'field_sdtsterm'));
+                            $field_collection_item->setHostEntity('node', $node);
+                            $field_collection_item->field_sdtstype[$node->language][0]['value'] = $sdtsterm->sdtstype;
+                            $field_collection_item->field_sdts_ptvctcnt[$node->language][0]['value'] = $sdtsterm->ptvctcnt;
+                            $field_collection_item->save();
+                        }
+                    } else {
+                        $node->field_select_sdts_vpf[$node->language][0]['value'] = "vpf";
+                        $node->field_vpflevel[$node->language][0]['value'] = $spdoinfo->vpfterm->vpflevel;
+                        foreach ($spdoinfo->ptvctinf->vpfterm->vpfinfo as $vpfterm) {
+                            $field_collection_item = entity_create('field_collection_item', array('field_name' => 'field_vpfterm'));
+                            $field_collection_item->setHostEntity('node', $node);
+                            $field_collection_item->field_vpftype[$node->language][0]['value'] = $vpfterm->vpftype;
+                            $field_collection_item->field_vpf_ptvctcnt[$node->language][0]['value'] = $vpfterm->ptvctcnt;
+                            $field_collection_item->save();
+                        }
+                    }
+                }
+            }
+        }
+
+
+        //Spatial Reference Information
+        if (isset($metadata->spref)) {
+            $spref = $metadata->spref;
+            if (isset($spref->horizsys)) {
+                $horizsys = $spref->horizsys;
+                //Horizontal coordinate system
+                if ($horizsys->geograph) {
+                    $node->field_latres[$node->language][0]['value'] = $horizsys->geograph->latres;
+                    $node->field_longres[$node->language][0]['value'] = $horizsys->geograph->longres;
+                    $node->field_geogunit[$node->language][0]['value'] = $horizsys->geograph->geogunit;
+                }
+                if ($horizsys->geodetic) {
+                    $node->field_horizdn[$node->language][0]['value'] = $horizsys->geodetic->horizdn;
+                    $node->field_ellips[$node->language][0]['value'] = $horizsys->geodetic->ellips;
+                    $node->field_semiaxis[$node->language][0]['value'] = $horizsys->geodetic->semiaxis;
+                    $node->field_denflat[$node->language][0]['value'] = $horizsys->geodetic->denflat;
+                }
+
+                if ($horizsys->local) {
+                    $node->field_localdes[$node->language][0]['value'] = $horizsys->local->localdes;
+                    $node->field_localgeo[$node->language][0]['value'] = $horizsys->local->localgeo;
+                }
+
+                //Planar Coordinate Information
+                if (isset($horizsys->planar->planci)) {
+                    $planci = $horizsys->planar->planci;
+                    $field_collection_item = entity_create('field_collection_item', array('field_name' => 'field_planar'));
+                    $field_collection_item->setHostEntity('node', $node);
+                    $field_collection_item->field_plance[$node->language][0]['value'] = $planci->plance;
+                    $field_collection_item->field_plandu[$node->language][0]['value'] = $planci->plandu;
+                    $field_collection_item->save();
+
+                    //Coordinate Representation 
+                    if ($planci->coordrep) {
+                        $field_collection_item1 = entity_create('field_collection_item', array('field_name' => 'field_coordrep'));
+                        $field_collection_item1->setHostEntity('field_collection_item', $field_collection_item);
+                        $field_collection_item1->field_absres[$node->language][0]['value'] = $planci->coordrep->absres;
+                        $field_collection_item1->field_ordres[$node->language][0]['value'] = $planci->coordrep->ordres;
+                        $field_collection_item1->save();
+                    }
+                    //Distance and Bearing Representation 
+                    else if ($planci->distbrep) {
+                        $field_collection_item1 = entity_create('field_collection_item', array('field_name' => 'field_distbrep'));
+                        $field_collection_item1->setHostEntity('field_collection_item', $field_collection_item);
+                        $field_collection_item1->field_distres[$node->language][0]['value'] = $planci->distbrep->distres;
+                        $field_collection_item1->field_bearres[$node->language][0]['value'] = $planci->distbrep->bearres;
+                        $field_collection_item1->field_bearunit[$node->language][0]['value'] = $planci->distbrep->bearunit;
+                        $field_collection_item1->field_bearrefd[$node->language][0]['value'] = $planci->distbrep->bearrefd;
+                        $field_collection_item1->field_bearrefm[$node->language][0]['value'] = $planci->distbrep->bearrefm;
+                        $field_collection_item1->save();
+                    }
+                }
+            }
+
+            //Vertical Coordinate System
+            if ($spref->vertdef->altsys) {
+                $node->field_altdatum[$node->language][0]['value'] = $spref->vertdef->altsys->altdatum;
+                foreach ($spref->vertdef->altsys->altres as $altres)
+                    $node->field_altres[$node->language][]['value'] = $altres;
+                $node->field_altunits[$node->language][0]['value'] = $spref->vertdef->altsys->altunits;
+                $node->field_altenc[$node->language][0]['value'] = $spref->vertdef->altsys->altenc;
+            }
+            if ($spref->vertdef->depthsys) {
+                $node->field_depthdn[$node->language][0]['value'] = $spref->vertdef->depthsys->depthdn;
+                foreach ($spref->vertdef->depthsys->depthres as $depthres)
+                    $node->field_depthres[$node->language][]['value'] = $depthres;
+                $node->field_depthdu[$node->language][0]['value'] = $spref->vertdef->depthsys->depthdu;
+                $node->field_depthem[$node->language][0]['value'] = $spref->vertdef->depthsys->depthem;
+            }
+        }
+
+        //Entity Attribute
+
+        if (isset($metadata->eainfo)) {
+            if (isset($metadata->eainfo->detailed)) {
+                foreach ($metadata->eainfo->detailed as $detailed) {
+                    $field_collection_item = entity_create('field_collection_item', array('field_name' => 'field_en_detail_desc'));
+                    $field_collection_item->setHostEntity('node', $node);
+
+                    $field_collection_item->field_enttypl[$node->language][0]['value'] = $detailed->enttyp->enttypl;
+                    $field_collection_item->field_enttypd[$node->language][0]['value'] = $detailed->enttyp->enttypd;
+                    $field_collection_item->field_enttypds[$node->language][0]['value'] = $detailed->enttyp->enttypds;
+                    $field_collection_item->save();
+
+                    foreach ($detailed->attr as $attr) {
+                        $field_collection_item1 = entity_create('field_collection_item', array('field_name' => 'field_attr'));
+                        $field_collection_item1->setHostEntity('field_collection_item', $field_collection_item);
+
+                        $field_collection_item1->field_attrlabl[$node->language][0]['value'] = $attr->attrlabl;
+                        $field_collection_item1->field_attrdef[$node->language][0]['value'] = $attr->attrdef;
+                        $field_collection_item1->field_attrdefs[$node->language][0]['value'] = $attr->attrdefs;
+                        // if(isset($attr->attrvai->attrva)) //
+                        $field_collection_item1->field_attrva[$node->language][0]['value'] = $attr->attrvai->attrva;
+                        if (isset($attr->attrvai->attrvae)) //
+                            $field_collection_item1->field_attrvae[$node->language][0]['value'] = $attr->attrvai->attrvae;
+                        // if(isset($attr->attrmfrq)) //
+                        $field_collection_item1->field_attrmfrq[$node->language][0]['value'] = $attr->attrmfrq;
+                        $field_collection_item1->save();
+
+                        $field_collection_item2 = entity_create('field_collection_item', array('field_name' => 'field_attr_dates'));
+                        $field_collection_item2->setHostEntity('field_collection_item', $field_collection_item1);
+                        // if(isset($attr->begdatea)) //
+                        $field_collection_item2->field_begdatea[$node->language][0]['value'] = $attr->begdatea;
+                        // if(isset($attr->enddatea))//
+                        $field_collection_item2->field_enddatea[$node->language][0]['value'] = $attr->enddatea;
+                        $field_collection_item2->save();
+
+                        foreach ($attr->attrdomv as $attrdomv) {
+                            $field_collection_item3 = entity_create('field_collection_item', array('field_name' => 'field_attrdomv'));
+                            $field_collection_item3->setHostEntity('field_collection_item', $field_collection_item1);
+                            if (isset($attrdomv->udom)) {
+                                $field_collection_item3->field_udom[$node->language][0]['value'] = $attrdomv->udom;
+                                $field_collection_item3->field_select_attrdomv[$node->language][0]['value'] = "unrepresentable_domain";
+                            }
+                            $field_collection_item3->save();
+
+                            //if(isset($attrdomv->edom)) //
+                            foreach ($attrdomv->edom as $edom) {
+                                $field_collection_item4 = entity_create('field_collection_item', array('field_name' => 'field_edom'));
+                                $field_collection_item4->setHostEntity('field_collection_item', $field_collection_item3);
+                                $field_collection_item3->field_select_attrdomv[$node->language][0]['value'] = "enumerated_domain";
+                                $field_collection_item4->field_edomv[$node->language][0]['value'] = $edom->edomv;
+                                $field_collection_item4->field_edomv[$node->language][0]['value'] = $edom->edomvd;
+                                $field_collection_item4->field_edomvds[$node->language][0]['value'] = $edom->edomvds;
+                                $field_collection_item4->save();
+                            }
+
+                            if (isset($attrdomv->rdom)) {
+                                $field_collection_item4 = entity_create('field_collection_item', array('field_name' => 'field_rdom'));
+                                $field_collection_item4->setHostEntity('field_collection_item', $field_collection_item3);
+                                $field_collection_item3->field_select_attrdomv[$node->language][0]['value'] = "range_domain";
+                                $field_collection_item4->field_rdommin[$node->language][0]['value'] = $attrdomv->rdom->rdommin;
+                                $field_collection_item4->field_rdommax[$node->language][0]['value'] = $attrdomv->rdom->rdommax;
+                                $field_collection_item4->field_attrunit[$node->language][0]['value'] = $attrdomv->rdom->attrunit;
+                                $field_collection_item4->field_attrmres[$node->language][0]['value'] = $attrdomv->rdom->attrmres;
+                                $field_collection_item4->save();
+                            }
+                            if (isset($attrdomv->codesetd)) {
+                                $field_collection_item4 = entity_create('field_collection_item', array('field_name' => 'field_codesetd'));
+                                $field_collection_item4->setHostEntity('field_collection_item', $field_collection_item3);
+                                $field_collection_item3->field_select_attrdomv[$node->language][0]['value'] = "codeset_domain";
+                                $field_collection_item4->field_codesetn[$node->language][0]['value'] = $attrdomv->codesetd->codesetn;
+                                $field_collection_item4->field_codesets[$node->language][0]['value'] = $attrdomv->codesetd->codesets;
+                                $field_collection_item4->save();
+                            }
+                            $field_collection_item3->save();
+                        }
+                    }
+                }
+            }
+
+            if (isset($metadata->eainfo->overview)) {
+                foreach ($metadata->eainfo->overview as $overview) {
+                    $field_collection_item = entity_create('field_collection_item', array('field_name' => 'field_en_overview'));
+                    $field_collection_item->setHostEntity('node', $node);
+                    //Entity and Attribute Overview
+                    //  if(isset($overview->eaover)) //
+                    $field_collection_item->field_eaover[$node->language][0]['value'] = $overview->eaover;
+
+                    //Entity and Attribute Detail Citation
+                    if (isset($overview->eadetcit))
+                        foreach ($overview->eadetcit as $eadetcit)
+                            $field_collection_item->field_eaover[$node->language][]['value'] = $eadetcit;
+                    $field_collection_item->save();
+                }
+            }
+        }
+
+
+        // Distribution
+
+        if (isset($metadata->distinfo)) {
+
+            foreach ($metadata->distinfo as $distinfo) {
+
+                $field_collection_item = entity_create('field_collection_item', array('field_name' => 'field_distribution'));
+                $field_collection_item->setHostEntity('node', $node);
+
+                $field_collection_item->field_resdesc[$node->language][0]['value'] = $metadata->distinfo->resdesc;
+                $field_collection_item->field_distliab[$node->language][0]['value'] = $metadata->distinfo->distliab;
+                $field_collection_item->field_custom[$node->language][0]['value'] = $metadata->distinfo->custom;
+                $field_collection_item->field_techpreq[$node->language][0]['value'] = $metadata->distinfo->techpreq;
+                $field_collection_item->save();
+
+
+                foreach ($metadata->distinfo->stdorder as $stdorder) {
+                    $field_collection_item1 = entity_create('field_collection_item', array('field_name' => 'field_stdorder'));
+                    $field_collection_item1->setHostEntity('field_collection_item', $field_collection_item);
+                    $field_collection_item1->field_fees[$node->language][0]['value'] = $stdorder->fees;
+                    $field_collection_item1->field_ordering[$node->language][0]['value'] = $stdorder->ordering;
+                    $field_collection_item1->field_turnarnd[$node->language][0]['value'] = $stdorder->turnarnd;
+
+                    if (isset($stdorder->nondig))
+                        $field_collection_item1->field_nondig[$node->language][0]['value'] = $stdorder->nondig;
+
+                    $field_collection_item1->save();
+
+                    foreach ($stdorder->digform as $digform) {
+                        $field_collection_item2 = entity_create('field_collection_item', array('field_name' => 'field_digform'));
+                        $field_collection_item2->setHostEntity('field_collection_item', $field_collection_item1);
+
+                        //Digital_Transfer_Information
+
+                        $field_collection_item2->field_formname[$node->language][0]['value'] = $digform->digtinfo->formname;
+                        if (isset($digform->digtinfo->formvern))
+                            $field_collection_item2->field_formvern[$node->language][0]['value'] = $digform->digtinfo->formvern;
+                        else
+                            $field_collection_item2->field_formverd[$node->language][0]['value'] = $digform->digtinfo->formverd;
+                        $field_collection_item2->field_formspec[$node->language][0]['value'] = $digform->digtinfo->formspec;
+                        $field_collection_item2->field_formcont[$node->language][0]['value'] = $digform->digtinfo->formcont;
+                        $field_collection_item2->field_filedec[$node->language][0]['value'] = $digform->digtinfo->filedec;
+                        $field_collection_item2->field_transize[$node->language][0]['value'] = $digform->digtinfo->transize;
+                        $field_collection_item2->save();
+
+                        //Digital Transfer Option
+                        //online transfer option
+                        foreach ($digform->digtopt->onlinopt as $onlinopt) {
+                            $field_collection_item3 = entity_create('field_collection_item', array('field_name' => 'field_onlinopt'));
+                            $field_collection_item3->setHostEntity('field_collection_item', $field_collection_item2);
+                            $field_collection_item3->field_accinstr[$node->language][0]['value'] = $onlinopt->accinstr;
+                            $field_collection_item3->field_oncomp[$node->language][0]['value'] = $onlinopt->oncomp;
+                            $field_collection_item3->save();
+
+                            foreach ($onlinopt->computer as $computer) {
+                                $field_collection_item4 = entity_create('field_collection_item', array('field_name' => 'field_computer'));
+                                $field_collection_item4->setHostEntity('field_collection_item', $field_collection_item3);
+                                //Network Resource Name
+                                if (isset($computer->networka->networkr)) {
+                                    foreach ($computer->networka->networkr as $networkr)
+                                        $field_collection_item4->field_networkr[$node->language][]['value'] = $networkr;
+                                }
+                                //Dialup Instructions
+                                if (isset($computer->dialinst)) {
+                                    $field_collection_item4->field_lowbps[$node->language][0]['value'] = $computer->dialinst->lowbps;
+                                    $field_collection_item4->field_highbps[$node->language][0]['value'] = $computer->dialinst->highbps;
+                                    $field_collection_item4->field_numdata[$node->language][0]['value'] = $computer->dialinst->numdata;
+                                    $field_collection_item4->field_numstop[$node->language][0]['value'] = $computer->dialinst->numstop;
+                                    $field_collection_item4->field_parity[$node->language][0]['value'] = $computer->dialinst->parity;
+                                    $field_collection_item4->field_compress[$node->language][0]['value'] = $computer->dialinst->compress;
+
+
+                                    foreach ($computer->dialinst->dialtel as $dialtel) {
+                                        $field_collection_item4->field_dialtel[$node->language][]['value'] = $dialtel;
+                                    }
+                                    foreach ($computer->dialinst->dialfile as $dialfile) {
+                                        $field_collection_item4->field_dialfile[$node->language][]['value'] = $dialfile;
+                                    }
+                                }
+                                $field_collection_item4->save();
+                            }
+                        }
+
+                        //offline transfer option
+                        foreach ($digform->digtopt->offoptn as $offoptn) {
+                            $field_collection_item3 = entity_create('field_collection_item', array('field_name' => 'field_offoptn'));
+                            $field_collection_item3->setHostEntity('field_collection_item', $field_collection_item2);
+                            $field_collection_item3->field_offmedia[$node->language][0]['value'] = $offoptn->offmedia;
+
+                            //Recording Capacity 
+                            foreach ($offoptn->reccap->recden as $recden)
+                                $field_collection_item3->field_recden[$node->language][]['value'] = $recden;
+
+                            $field_collection_item3->field_recdenu[$node->language][0]['value'] = $offoptn->reccap->recdenu;
+
+                            //Recording Format 
+                            foreach ($offoptn->recfmt as $recfmt)
+                                $field_collection_item3->field_recfmt[$node->language][]['value'] = $recfmt;
+
+                            $field_collection_item3->field_compat[$node->language][]['value'] = $offoptn->compat;
+
+                            $field_collection_item3->save();
+                        }
+                    }
+                }
+
+
+                //Distributor contact
+                if (isset($distinfo->distrib->cntinfo)) {
+                    $cntinfo = $distinfo->distrib->cntinfo;
+                    $field_collection_item1 = entity_create('field_collection_item', array('field_name' => 'field_contact_info'));
+                    $field_collection_item1->setHostEntity('field_collection_item', $field_collection_item);
+                    $field_collection_item1->field_cont_cit_name_person[$node->language][0]['value'] = $cntinfo->cntorgp->cntper;
+                    $field_collection_item1->field_cont_cit_name_org[$node->language][0]['value'] = $cntinfo->cntorgp->cntorg;
+                    $field_collection_item1->field_position[$node->language][0]['value'] = $cntinfo->cntpos;
+
+                    foreach ($cntinfo->cntvoice as $cntvoice) {
+                        // missing  contact voice telephone
+                        $field_collection_item1->field_cont_cit_phone[$node->language][]['value'] = $cntvoice;
+                    }
+//Contact TDD/TTY Telephone
+                    foreach ($cntinfo->cnttdd as $cnttdd) {
+                        $node->field_cnttdd[$node->language][]['value'] = $cnttdd;
+                    }
+                    foreach ($cntinfo->cntfax as $cntfax) {
+                        $field_collection_item1->field_cont_cit_fax[$node->language][]['value'] = $cntfax;
+                    }
+                    foreach ($cntinfo->cntemail as $cntemail) {
+                        $field_collection_item1->field_cont_cit_email[$node->language][]['value'] = $cntemail;
+                    }
+
+                    $field_collection_item1->save();
+
+                    foreach ($cntinfo->cntaddr as $address) {
+                        $field_collection_item2 = entity_create('field_collection_item', array('field_name' => 'field_iden_originator_add'));
+                        $field_collection_item2->setHostEntity('field_collection_item', $field_collection_item1);
+                        $field_collection_item2->field_address_type[$node->language][0]['value'] = $address->addrtype;
+
+                        foreach ($address->address as $insideaddress) {
+                            $field_collection_item2->field_cont_cit_street[$node->language][]['value'] = $insideaddress;
+                        }
+                        $field_collection_item2->field_cont_cit_city[$node->language][0]['value'] = $address->city;
+                        $field_collection_item2->field_cont_cit_province[$node->language][0]['value'] = $address->state;
+                        $field_collection_item2->field_cont_cit_postalcode[$node->language][0]['value'] = $address->postal;
+                        $field_collection_item2->field_cont_cit_country[$node->language][0]['value'] = $address->country;
+                        $field_collection_item2->save();
+                    }
+                }
+
+                //Time Period
+                if (isset($distinfo->availabl)) {
+                    $field_collection_item1 = entity_create('field_collection_item', array('field_name' => 'field_i_iden_timeperiod'));
+                    $field_collection_item1->setHostEntity('field_collection_item', $field_collection_item);
+                    //$field_collection_item1->field_currentness_ref[$node->language][0]['value'] = $distinfo->availabl->srccurr;
+
+                    if (isset($distinfo->availabl->timeinfo)) {
+                        $timeinfo = $distinfo->availabl->timeinfo;
+                        //single date
+                        if (isset($timeinfo->sngdate)) {
+                            $field_collection_item1->field_calendar_date[$node->language][0]['value'] = $timeinfo->sngdate->caldate;
+                            $field_collection_item1->field_time_of_day[$node->language][0]['value'] = $timeinfo->sngdate->time;
+                        }
+                        //range of date
+                        else if ($timeinfo->rngdates) {
+                            $field_collection_item1->field_beginning_date[$node->language][0]['value'] = $timeinfo->rngdates->begdate;
+                            $field_collection_item1->field_beginning_time[$node->language][0]['value'] = $timeinfo->rngdates->begtime;
+                            $field_collection_item1->field_ending_date[$node->language][0]['value'] = $timeinfo->rngdates->enddate;
+                            $field_collection_item1->field_ending_time[$node->language][0]['value'] = $timeinfo->rngdates->endtime;
+                        }
+                    }
+                    $field_collection_item1->save();
+                }
+                //multiple date
+                if (isset($distinfo->availabl->timeinfo->mdattim->sngdate)) {
+                    foreach ($distinfo->availabl->timeinfo->mdattim->sngdate as $sngdate) {
+                        $field_collection_item2 = entity_create('field_collection_item', array('field_name' => 'field_mul_calendar_datetime'));
+                        $field_collection_item2->setHostEntity('field_collection_item', $field_collection_item1);
+                        $field_collection_item2->field_calendar_date[$node->language][0]['value'] = $sngdate->caldate;
+                        $field_collection_item2->field_time_of_day[$node->language][0]['value'] = $sngdate->time;
+                        $field_collection_item2->save();
+                    }
+                }
+            }
+        }
+
+        //metadata reference
+        if (isset($metadata->metainfo)) {
+            $node->field_metd[$node->language][0]['value'] = $metadata->metainfo->metd;
+            $node->field_metrd[$node->language][0]['value'] = $metadata->metainfo->metrd;
+            $node->field_metfrd[$node->language][0]['value'] = $metadata->metainfo->metfrd;
+            $node->field_metac[$node->language][0]['value'] = $metadata->metainfo->metac;
+            $node->field_metuc[$node->language][0]['value'] = $metadata->metainfo->metuc;
+            $node->field_metstdn[$node->language][0]['value'] = $metadata->metainfo->metstdn;
+            $node->field_metstdv[$node->language][0]['value'] = $metadata->metainfo->metstdv;
+            $node->field_mettc[$node->language][0]['value'] = $metadata->metainfo->mettc;
+
+            $node->field_metscs[$node->language][0]['value'] = $metadata->metainfo->metscs;
+            $node->field_metsc[$node->language][0]['value'] = $metadata->metainfo->metsc;
+            $node->field_metshd[$node->language][0]['value'] = $metadata->metainfo->metshd;
+
+            $field_collection_item = entity_create('field_collection_item', array('field_name' => 'field_metextns'));
+            $field_collection_item->setHostEntity('node', $node);
+
+            foreach ($metadata->metainfo->onlink as $onlink) {
+                $field_collection_item->field_onlink[$node->language][]['url'] = $onlink;
+            }
+            $field_collection_item->field_metprof[$node->language][0]['value'] = $metadata->metainfo->metprof;
+            $field_collection_item->save();
+
+            //metadata contact          
+            if (isset($metadata->metainfo->metc->cntinfo)) {
+                $cntinfo = $metadata->metainfo->metc->cntinfo;
+                $field_collection_item1 = entity_create('field_collection_item', array('field_name' => 'field_contact_info'));
+                $field_collection_item1->setHostEntity('node', $node);
+                $field_collection_item1->field_cont_cit_name_person[$node->language][0]['value'] = $cntinfo->cntorgp->cntper;
+                $field_collection_item1->field_cont_cit_name_org[$node->language][0]['value'] = $cntinfo->cntorgp->cntorg;
+                $field_collection_item1->field_position[$node->language][0]['value'] = $cntinfo->cntpos;
+
+                foreach ($cntinfo->cntvoice as $cntvoice) {
+                    // missing  contact voice telephone
+                    $field_collection_item1->field_cont_cit_phone[$node->language][]['value'] = $cntvoice;
+                }
+
+//Contact TDD/TTY Telephone
+                foreach ($cntinfo->cnttdd as $cnttdd) {
+                    $node->field_cnttdd[$node->language][]['value'] = $cnttdd;
+                }
+                foreach ($cntinfo->cntfax as $cntfax) {
+                    $field_collection_item1->field_cont_cit_fax[$node->language][]['value'] = $cntfax;
+                }
+                foreach ($cntinfo->cntemail as $cntemail) {
+                    $field_collection_item1->field_cont_cit_email[$node->language][]['value'] = $cntemail;
+                }
+
+                $field_collection_item1->save();
+
+                foreach ($cntinfo->cntaddr as $address) {
+                    $field_collection_item2 = entity_create('field_collection_item', array('field_name' => 'field_iden_originator_add'));
+                    $field_collection_item2->setHostEntity('field_collection_item', $field_collection_item1);
+                    $field_collection_item2->field_address_type[$node->language][0]['value'] = $address->addrtype;
+
+                    foreach ($address->address as $insideaddress) {
+                        $field_collection_item2->field_cont_cit_street[$node->language][]['value'] = $insideaddress;
+                    }
+                    $field_collection_item2->field_cont_cit_city[$node->language][0]['value'] = $address->city;
+                    $field_collection_item2->field_cont_cit_province[$node->language][0]['value'] = $address->state;
+                    $field_collection_item2->field_cont_cit_postalcode[$node->language][0]['value'] = $address->postal;
+                    $field_collection_item2->field_cont_cit_country[$node->language][0]['value'] = $address->country;
+                    $field_collection_item2->save();
+                }
+            }
+        }
+
+        //</editor-fold>
+        //</editor-fold>
+        //</editor-fold>
+        //</editor-fold>
+        node_save($node);
+        drupal_set_message("Metadata <strong>" . $node->title . "</strong> has been created.");
+    } catch (Exception $e) {
+        form_set_error($e->getMessage());
+    }
+}
+
+function getVidTaxonomy($vocabulary_name) {
+    try {
+        $result = db_query('SELECT vid FROM {taxonomy_vocabulary} where machine_name=:vocabularyname', array(':vocabularyname' => $vocabulary_name));
+        $vid = $result->fetchField();
+        return $vid;
+    } catch (Exception $e) {
+        form_set_error($e->getMessage());
+        return -1;
+    }
+}
+
+?>

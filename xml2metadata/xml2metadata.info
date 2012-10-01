@@ -1,0 +1,5 @@
+; $Id$
+name = xml2metadata
+description = Converts xml metadata to Drupal nodes
+core = 7.x
+dependencies[] = metadata_catalog

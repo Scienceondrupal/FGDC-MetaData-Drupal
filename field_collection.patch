@@ -1,0 +1,19 @@
+*** field_collection.module	2012-09-25 13:05:10.000000000 -0500
+--- field_collection_new.module	2012-09-25 13:04:19.000000000 -0500
+***************
+*** 975,981 ****
+      case 'field_collection_embed':
+        // If the field collection item form contains another field collection,
+        // we might ran into a recursive loop. Prevent that.
+!       if ($recursion++ > 3) {
+          drupal_set_message(t('The field collection item form has not been embedded to avoid recursive loops.'), 'error');
+          return $element;
+        }
+--- 975,981 ----
+      case 'field_collection_embed':
+        // If the field collection item form contains another field collection,
+        // we might ran into a recursive loop. Prevent that.
+!       if ($recursion++ > 4) {
+          drupal_set_message(t('The field collection item form has not been embedded to avoid recursive loops.'), 'error');
+          return $element;
+        }

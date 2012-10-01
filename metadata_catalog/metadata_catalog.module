@@ -1,0 +1,7 @@
+<?php
+/**
+ * @file
+ * Code for the Metadata_Catalog feature.
+ */
+
+include_once 'metadata_catalog.features.inc';
