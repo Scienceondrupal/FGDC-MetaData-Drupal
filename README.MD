@@ -1,5 +1,11 @@
 ### README ###
 
+---------------------
+This module was developed with initial funding from the NSF EPsCOR Grant.  Currently, the module is being maintained with funding from the NASA ACCESS Grant.
+Copyright (c) 2013, Information Technology & Systems Center.  University of Alabama in Huntsville
+All rights reserved.
+Redistribution and use of the module, with or without modification, are permitted with proper credit to Information Technology & Systems Center,  University of Alabama in Huntsville.
+---------------------
 
 INTRODUCTION
 ---------------------
@@ -13,6 +19,8 @@ These modules help us import data from xml (in FGDC, Federal Geographic Data Com
 To know more about the FGDC standard, follow through:
 http://www.fgdc.gov/metadata/csdgm 
 
+--update 08/02/2013
+This module now features 'Data Casting', a RSS feed service using the FGDC standard.
 
 REQUIREMENTS
 ---------------------
@@ -57,4 +65,3 @@ If you haven't done the patch, you may see the error message. Otherwise you can 
 For XML2MetaData module, the default location is:
 <BaseURL>/xml2metadata and it also appears in Navigation Menu.
 The interface is quite simple and once you successfully create a node from XML, you will see the success message.
-

@@ -1,5 +1,13 @@
 <?php
 
+/**
+ * This module was developed with initial funding from the NSF EPsCOR Grant.  Currently, the module is being maintained with funding from the NASA ACCESS Grant.
+ * Copyright (c) 2013, Information Technology & Systems Center.  University of Alabama in Huntsville
+ * All rights reserved.
+ * Redistribution and use of the module, with or without modification, are permitted with proper credit to Information Technology & Systems Center,  University of Alabama in Huntsville.
+ */
+
+
 // Implementation of hook_menu function.
 function xml2metadata_menu() {
     $items['xml2metadata'] = array(
@@ -7,6 +15,14 @@ function xml2metadata_menu() {
         'page callback' => 'xml2metadata_page_default',
         'type' => MENU_NORMAL_ITEM,
         'access arguments' => array('administer xml2metadata'),
+    );
+
+    $items['node/%/datacast'] = array(
+        'title' => 'Data casting metadata to XML',
+        'page callback' => 'exportToDataCast',
+        'access arguments' => array('access content'),
+        'type' => MENU_NORMAL_ITEM,
+        'file' => 'fgdc.inc',
     );
     return $items;
 }
